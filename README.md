@@ -2,7 +2,7 @@
 
 Weekly and monthly sales forecast for Pavizham products. Reads sales CSV, trains a model, and opens a dashboard.
 
-Numbers are in **packets** (the `quantity_in_kg` column is packet count, not kg).
+All quantities are in **kilograms (kg)** — the `quantity_in_kg` column records how many kg of each product were sold.
 
 ---
 
@@ -60,9 +60,9 @@ python run_pipeline.py
 
 This creates:
 
-- `outputs/forecast_sku_weekly.csv` — expected sales per product per week
-- `outputs/forecast_product_weekly.csv` — totals by product
-- `outputs/weekly_demand_panel.csv` — past weekly sales used for training
+- `outputs/forecast_sku_weekly.csv` — expected **kg** per product per week (`forecast_qty_kg` column)
+- `outputs/forecast_product_weekly.csv` — totals by product (kg)
+- `outputs/weekly_demand_panel.csv` — past weekly kg sold (used for training)
 - `models/weekly_demand_model.joblib` — saved model
 
 Optional — check how accurate predictions are against known past sales:

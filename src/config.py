@@ -10,7 +10,7 @@ MODEL_DIR = ROOT / "models"
 REPORT_DIR = ROOT / "reports"
 
 SKU_COL = "sku"
-QTY_COL = "qty_units"
+QTY_COL = "qty_kg"
 
 EXPORT_VOUCHERS = {"EXPORT SALES"}
 BULK_SPECIAL_VOUCHERS = {
@@ -36,7 +36,7 @@ MIN_BULK_ABS = {
 
 MIN_WEEKS_HISTORY = 12
 TEST_WEEKS = 8
-HORIZON_WEEKS = 8
+HORIZON_WEEKS = 104
 RANDOM_SEED = 42
 
 DEMAND_MODE = "regular_capped"

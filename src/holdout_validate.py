@@ -88,7 +88,7 @@ def run_holdout(cutoff: pd.Timestamp | None = None):
     bundle, _ = _build_bundle(train_panel)
 
     preds = recursive_forecast(train_panel, bundle, test_weeks).rename(
-        columns={"forecast_qty_units": "predicted"}
+        columns={"forecast_qty_kg": "predicted"}
     )
     actuals = test_panel[
         ["week_start", "sku", "qty", "Product", "Brand", "Main_Category", "Packet_Size"]

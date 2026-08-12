@@ -45,7 +45,7 @@ def load_all():
     ]
     hist_slim["series"] = LABEL_PAST
 
-    fc = forecast.rename(columns={"forecast_qty_units": "units"}).copy()
+    fc = forecast.rename(columns={"forecast_qty_kg": "units"}).copy()
     fc["series"] = LABEL_FORECAST
 
     combined = pd.concat([hist_slim, fc], ignore_index=True)
@@ -78,6 +78,11 @@ def apply_filters(df, brands, categories, products, skus):
     return out
 
 
+def apply_date_filter(df, start, end):
+    mask = (df["week_start"].dt.date >= start) & (df["week_start"].dt.date <= end)
+    return df[mask]
+
+
 def accuracy_label(wape: float) -> str:
     pct = wape * 100
     if pct <= 15:
@@ -89,7 +94,7 @@ def accuracy_label(wape: float) -> str:
     return "Needs improvement"
 
 
-def style_fig(fig, title: str, y_label: str = "Number of packets"):
+def style_fig(fig, title: str, y_label: str = "Kilograms (kg)"):
     fig.update_layout(
         title=dict(text=title, x=0.0, xanchor="left", font=dict(size=16)),
         margin=dict(l=20, r=20, t=55, b=20),
@@ -116,11 +121,11 @@ def friendly_table(df: pd.DataFrame) -> pd.DataFrame:
         "Product": "Product",
         "Packet_Size": "Pack size",
         "Main_Category": "Category",
-        "units": "Expected packets",
-        "forecast_units": "Expected packets",
-        "forecast_qty_units": "Expected packets",
-        "actual": "Actual packets sold",
-        "predicted": "Predicted packets",
+        "units": "Expected kg",
+        "forecast_units": "Expected kg",
+        "forecast_qty_kg": "Expected kg",
+        "actual": "Actual kg sold",
+        "predicted": "Predicted kg",
         "abs_err": "Difference",
         "WAPE": "Error rate",
         "WAPE_pct": "Error rate (%)",
@@ -130,14 +135,38 @@ def friendly_table(df: pd.DataFrame) -> pd.DataFrame:
     return out.rename(columns={k: v for k, v in rename.items() if k in out.columns})
 
 
+# ── Load data ──────────────────────────────────────────────────────────────────
 data = load_all()
 combined_all = data["combined"]
 
+fc_min_date = data["forecast"]["week_start"].min().date()
+fc_max_date = data["forecast"]["week_start"].max().date()
+hist_max_date = data["hist"]["week_start"].max().date()
+
+# ── Sidebar ────────────────────────────────────────────────────────────────────
 st.sidebar.title("Filters")
-st.sidebar.markdown(
-    "Past sales = what already happened. Expected sales = forecast.\n\n"
-    "Leave filters empty to show everything."
+
+st.sidebar.markdown("### Forecast date range")
+st.sidebar.caption(
+    f"Pick any dates from today to {fc_max_date.strftime('%d %b %Y')}. "
+    "The model covers up to 2 years ahead."
 )
+
+date_from = st.sidebar.date_input(
+    "From",
+    value=fc_min_date,
+    min_value=fc_min_date,
+    max_value=fc_max_date,
+)
+date_to = st.sidebar.date_input(
+    "To",
+    value=fc_max_date,
+    min_value=fc_min_date,
+    max_value=fc_max_date,
+)
+if date_from > date_to:
+    st.sidebar.error("'From' date must be before 'To' date.")
+    date_to = date_from
 
 view_mode = st.sidebar.radio("Show by", ["Week", "Month"])
 
@@ -164,31 +193,27 @@ if sel_prod:
 skus_f = sorted(sku_pool["sku"].dropna().unique())
 sel_sku = st.sidebar.multiselect("Pack / item", skus_f, default=[])
 
-show_past = st.sidebar.checkbox("Past sales", value=True)
-show_future = st.sidebar.checkbox("Expected sales", value=True)
 top_n = st.sidebar.slider("Top products in lists", 5, 25, 10)
 
+# ── Apply filters ──────────────────────────────────────────────────────────────
 hist_f = apply_filters(data["hist"], sel_brand, sel_cat, sel_prod, sel_sku)
-fc_f = apply_filters(data["forecast"], sel_brand, sel_cat, sel_prod, sel_sku)
-comb_f = apply_filters(data["combined"], sel_brand, sel_cat, sel_prod, sel_sku)
+fc_all = apply_filters(data["forecast"], sel_brand, sel_cat, sel_prod, sel_sku)
+fc_f = apply_date_filter(fc_all, date_from, date_to)
+fc_f["month"] = fc_f["week_start"].dt.to_period("M").astype(str)
 
-keep = []
-if show_past:
-    keep.append(LABEL_PAST)
-if show_future:
-    keep.append(LABEL_FORECAST)
-comb_f = comb_f[comb_f["series"].isin(keep)]
+# combined for home tab shows past + selected forecast window
+hist_with_series = hist_f.copy()
+hist_with_series["series"] = LABEL_PAST
+fc_with_series = fc_f.copy()
+fc_with_series["series"] = LABEL_FORECAST
+comb_f = pd.concat([hist_with_series, fc_with_series], ignore_index=True)
+comb_f["month"] = comb_f["week_start"].dt.to_period("M").astype(str)
 
+# ── Header ─────────────────────────────────────────────────────────────────────
 st.title("Sales Forecast Dashboard")
 st.markdown(
-    f"""
-See **what sold before** and **what is expected to sell next** — by week or by month.
-
-| | Dates |
-|---|---|
-| **Past sales data** | {data['hist']['week_start'].min().strftime('%d %b %Y')} → {data['hist']['week_start'].max().strftime('%d %b %Y')} |
-| **Future forecast** | {data['forecast']['week_start'].min().strftime('%d %b %Y')} → {data['forecast']['week_start'].max().strftime('%d %b %Y')} |
-"""
+    f"Showing forecast for **{date_from.strftime('%d %b %Y')}** → **{date_to.strftime('%d %b %Y')}**. "
+    f"Change the date range in the sidebar to see any window up to **{fc_max_date.strftime('%d %b %Y')}**."
 )
 
 holdout_wape = None
@@ -197,17 +222,17 @@ if data["holdout_metrics"]:
 
 c1, c2, c3, c4 = st.columns(4)
 with c1:
-    st.metric("Expected total (forecast)", f"{fc_f['units'].sum():,.0f} packets")
+    st.metric("Expected total (selected period)", f"{fc_f['units'].sum():,.0f} kg")
 with c2:
-    st.metric("Products", f"{comb_f['Product'].nunique():,}")
+    st.metric("Products in forecast", f"{fc_f['Product'].nunique():,}")
 with c3:
     if holdout_wape is not None:
-        st.metric("Tested error rate", f"{holdout_wape * 100:.0f}%")
+        st.metric("Prediction accuracy", f"{holdout_wape * 100:.0f}% error")
         st.caption(f"Rating: {accuracy_label(holdout_wape)}")
     else:
-        st.metric("Tested error rate", "Not run yet")
+        st.metric("Prediction accuracy", "Not tested yet")
 with c4:
-    st.metric("Items tracked", f"{comb_f['sku'].nunique():,}")
+    st.metric("Weeks selected", f"{fc_f['week_start'].nunique()}")
 
 tab_home, tab_week, tab_month, tab_products, tab_test, tab_download = st.tabs(
     [
@@ -220,10 +245,10 @@ tab_home, tab_week, tab_month, tab_products, tab_test, tab_download = st.tabs(
     ]
 )
 
-# Home
+# ── Home ───────────────────────────────────────────────────────────────────────
 with tab_home:
     st.subheader("At a glance")
-    st.markdown("Blue line = **past sales**. Orange line = **expected future sales**.")
+    st.markdown("Blue = **past sales** (actual). Orange = **expected future sales** (forecast).")
 
     if view_mode == "Week":
         ts = comb_f.groupby(["week_start", "series"], as_index=False)["units"].sum()
@@ -235,9 +260,9 @@ with tab_home:
     fig = px.line(
         ts, x=xcol, y="units", color="series", markers=True,
         color_discrete_map={LABEL_PAST: "#1f4e79", LABEL_FORECAST: "#e67e22"},
-        labels={"units": "Packets", "series": ""},
+        labels={"units": "kg", "series": ""},
     )
-    style_fig(fig, f"Total sales over time (by {xlab.lower()})")
+    style_fig(fig, f"Past sales + expected future sales (by {xlab.lower()})")
     fig.update_xaxes(title_text=xlab)
     st.plotly_chart(fig, width="stretch")
 
@@ -245,51 +270,48 @@ with tab_home:
     with left:
         cat_mix = fc_f.groupby("Main_Category", as_index=False)["units"].sum().sort_values("units", ascending=False)
         fig2 = px.pie(cat_mix, names="Main_Category", values="units", hole=0.4,
-                      labels={"units": "Packets", "Main_Category": "Category"})
-        style_fig(fig2, "Expected sales — share by category", y_label="")
+                      labels={"units": "kg", "Main_Category": "Category"})
+        style_fig(fig2, "Expected sales — share by category (selected period)", y_label="")
         fig2.update_layout(height=400)
         st.plotly_chart(fig2, width="stretch")
 
     with right:
-        st.markdown("### What to focus on next week")
-        if not fc_f.empty:
-            first_week = fc_f["week_start"].min()
+        first_week = fc_f["week_start"].min() if not fc_f.empty else None
+        if first_week is not None:
+            st.markdown(f"### Top products — week of {first_week.strftime('%d %b %Y')}")
             top_items = fc_f[fc_f["week_start"] == first_week].nlargest(top_n, "units")
             for _, row in top_items.iterrows():
-                st.markdown(f"- **{row['Product']}** ({row['Packet_Size']}) — **{row['units']:,.0f}** packets expected")
-            st.caption(f"Week starting {first_week.strftime('%d %b %Y')}")
+                st.markdown(f"- **{row['Product']}** ({row['Packet_Size']}) — **{row['units']:,.0f} kg** expected")
 
     st.markdown("---")
     st.markdown("### Sales trend by category")
     grain = "week_start" if view_mode == "Week" else "month"
     cat_ts = comb_f.groupby([grain, "Main_Category"], as_index=False)["units"].sum()
     fig3 = px.area(cat_ts, x=grain, y="units", color="Main_Category",
-                   labels={"units": "Packets", "Main_Category": "Category"})
-    style_fig(fig3, "How each category is selling over time", y_label="Packets")
+                   labels={"units": "kg", "Main_Category": "Category"})
+    style_fig(fig3, "How each category is selling over time", y_label="kg")
     fig3.update_layout(height=450)
     st.plotly_chart(fig3, width="stretch")
 
-# Week by week
+# ── Week by week ───────────────────────────────────────────────────────────────
 with tab_week:
     st.subheader("Expected sales — week by week")
-    st.markdown("Use this for **short-term planning**: stock, production, and dispatch.")
+    st.caption(f"Showing {date_from.strftime('%d %b %Y')} → {date_to.strftime('%d %b %Y')}. Change dates in the sidebar.")
+    st.markdown("Use this for **stock, production, and dispatch planning**.")
 
     weekly = (
         fc_f.groupby("week_start", as_index=False)
-        .agg(**{"Expected packets": ("units", "sum"), "Products": ("Product", "nunique")})
+        .agg(**{"Expected kg": ("units", "sum"), "Products": ("Product", "nunique")})
         .sort_values("week_start")
     )
-    fig = px.bar(weekly, x="week_start", y="Expected packets", text_auto=".2s")
-    style_fig(fig, "Total expected packets each week")
+    fig = px.bar(weekly, x="week_start", y="Expected kg", text_auto=".2s",
+                 labels={"week_start": "Week"})
+    style_fig(fig, "Total expected kg each week")
     fig.update_traces(marker_color="#e67e22")
     st.plotly_chart(fig, width="stretch")
 
     st.markdown("#### Week totals")
-    st.dataframe(
-        friendly_table(weekly),
-        width="stretch",
-        hide_index=True,
-    )
+    st.dataframe(friendly_table(weekly), width="stretch", hide_index=True)
 
     st.markdown("---")
     st.markdown("#### Pick a week — see every product")
@@ -320,22 +342,23 @@ with tab_week:
             color_continuous_midpoint=0,
             labels={"change_pct": "Change (%)", "week_start": "Week"},
         )
-        style_fig(fig, "How much expected sales change from one week to the next", y_label="Change (%)")
+        style_fig(fig, "How much expected sales change week to week", y_label="Change (%)")
         st.plotly_chart(fig, width="stretch")
 
-# Month by month
+# ── Month by month ─────────────────────────────────────────────────────────────
 with tab_month:
     st.subheader("Expected sales — month by month")
+    st.caption(f"Showing {date_from.strftime('%d %b %Y')} → {date_to.strftime('%d %b %Y')}. Change dates in the sidebar.")
     st.markdown("Use this for **monthly targets**, purchase planning, and management reports.")
 
     monthly = (
         fc_f.groupby("month", as_index=False)
-        .agg(**{"Expected packets": ("units", "sum"), "Products": ("Product", "nunique")})
+        .agg(**{"Expected kg": ("units", "sum"), "Products": ("Product", "nunique")})
         .sort_values("month")
     )
-    fig = px.bar(monthly, x="month", y="Expected packets", text_auto=".2s", color="Expected packets",
+    fig = px.bar(monthly, x="month", y="Expected kg", text_auto=".2s", color="Expected kg",
                  color_continuous_scale="Oranges", labels={"month": "Month"})
-    style_fig(fig, "Total expected packets each month")
+    style_fig(fig, "Total expected kg each month")
     st.plotly_chart(fig, width="stretch")
 
     hist_m = hist_f.groupby("month", as_index=False)["units"].sum()
@@ -343,10 +366,10 @@ with tab_month:
     fc_m = fc_f.groupby("month", as_index=False)["units"].sum()
     fc_m["Type"] = LABEL_FORECAST
     both_m = pd.concat([
-        hist_m.rename(columns={"units": "Packets"}),
-        fc_m.rename(columns={"units": "Packets"}),
+        hist_m.rename(columns={"units": "kg"}),
+        fc_m.rename(columns={"units": "kg"}),
     ])
-    fig2 = px.bar(both_m, x="month", y="Packets", color="Type", barmode="group",
+    fig2 = px.bar(both_m, x="month", y="kg", color="Type", barmode="group",
                   color_discrete_map={LABEL_PAST: "#1f4e79", LABEL_FORECAST: "#e67e22"},
                   labels={"month": "Month"})
     style_fig(fig2, "Past months vs forecast months")
@@ -356,19 +379,20 @@ with tab_month:
     mprod = fc_f.groupby(["month", "Product"], as_index=False)["units"].sum()
     top_products = mprod.groupby("Product")["units"].sum().nlargest(top_n).index
     heat = mprod[mprod["Product"].isin(top_products)]
-    pivot = heat.pivot(index="Product", columns="month", values="units").fillna(0)
-    fig3 = px.imshow(pivot, aspect="auto", color_continuous_scale="YlOrRd",
-                     labels=dict(color="Expected packets", x="Month", y="Product"))
-    style_fig(fig3, f"Expected packets — top {top_n} products (darker = more)", y_label="Product")
-    fig3.update_layout(height=max(400, top_n * 28))
-    st.plotly_chart(fig3, width="stretch")
+    if not heat.empty:
+        pivot = heat.pivot(index="Product", columns="month", values="units").fillna(0)
+        fig3 = px.imshow(pivot, aspect="auto", color_continuous_scale="YlOrRd",
+                         labels=dict(color="Expected kg", x="Month", y="Product"))
+        style_fig(fig3, f"Expected kg — top {top_n} products (darker = more)", y_label="Product")
+        fig3.update_layout(height=max(400, top_n * 28))
+        st.plotly_chart(fig3, width="stretch")
 
     st.dataframe(friendly_table(monthly), width="stretch", hide_index=True)
 
-# Products
+# ── Products ───────────────────────────────────────────────────────────────────
 with tab_products:
     st.subheader("Which products will sell the most?")
-    st.markdown("Ranked list for the **upcoming forecast period** (based on your filters).")
+    st.caption(f"Based on the selected period: {date_from.strftime('%d %b %Y')} → {date_to.strftime('%d %b %Y')}.")
 
     prod_rank = (
         fc_f.groupby(["Product", "Main_Category", "Brand"], as_index=False)["units"]
@@ -378,20 +402,20 @@ with tab_products:
     )
     fig = px.bar(
         prod_rank.sort_values("units"), x="units", y="Product", color="Main_Category",
-        orientation="h", labels={"units": "Expected packets", "Product": "Product", "Main_Category": "Category"},
+        orientation="h", labels={"units": "Expected kg", "Product": "Product", "Main_Category": "Category"},
     )
-    style_fig(fig, f"Top {top_n} products — expected total sales")
+    style_fig(fig, f"Top {top_n} products — expected total kg (selected period)")
     fig.update_layout(height=max(380, top_n * 28))
     st.plotly_chart(fig, width="stretch")
 
     st.markdown("---")
     st.markdown("#### Look at one product in detail")
-    sku_choices = sorted(fc_f["sku"].unique()) if not fc_f.empty else []
+    sku_choices = sorted(fc_all["sku"].unique()) if not fc_all.empty else []
     if sku_choices:
-        top_sku = fc_f.groupby("sku")["units"].sum().sort_values(ascending=False).index[0]
+        top_sku = fc_all.groupby("sku")["units"].sum().sort_values(ascending=False).index[0]
         default_ix = sku_choices.index(top_sku) if top_sku in sku_choices else 0
         pick_sku = st.selectbox(
-            "Choose product (full name with pack size)",
+            "Choose a product",
             sku_choices,
             index=default_ix,
         )
@@ -409,18 +433,21 @@ with tab_products:
                 x=sku_fc["week_start"], y=sku_fc["units"], name=LABEL_FORECAST,
                 mode="lines+markers", line=dict(color="#e67e22", dash="dash"),
             ))
-        style_fig(fig, f"Past vs expected — {pick_sku}")
+        style_fig(fig, f"Past sales + 2-year forecast — {pick_sku}")
         st.plotly_chart(fig, width="stretch")
 
         c1, c2, c3 = st.columns(3)
-        c1.metric("Sold in past period", f"{sku_hist['units'].sum():,.0f} packets")
-        c2.metric("Expected in forecast", f"{sku_fc['units'].sum():,.0f} packets")
-        c3.metric("Average per week (forecast)", f"{sku_fc['units'].mean():,.0f} packets" if not sku_fc.empty else "—")
+        c1.metric("Sold in past period (total)", f"{sku_hist['units'].sum():,.0f} kg")
+        c2.metric("Expected — full 2-year forecast", f"{sku_fc['units'].sum():,.0f} kg")
+        c3.metric("Average per week", f"{sku_fc['units'].mean():,.0f} kg" if not sku_fc.empty else "—")
 
-# Accuracy
+# ── Accuracy ───────────────────────────────────────────────────────────────────
 with tab_test:
     st.subheader("Can we trust these numbers?")
-    st.markdown("We trained on older months, predicted newer months, and compared to real sales.")
+    st.markdown(
+        "To check accuracy, we **hid** 6 months of real sales from the model, let it predict them, "
+        "then compared to what actually happened."
+    )
 
     hm = data.get("holdout_metrics")
     if hm is None:
@@ -436,10 +463,11 @@ with tab_test:
         c1, c2, c3 = st.columns(3)
         c1.metric("Error rate", f"{err_pct:.0f}%")
         c2.metric("Rating", accuracy_label(mm["WAPE"]))
-        c3.metric("Typical gap", f"{mm['MAE']:.0f} packets/week")
+        c3.metric("Typical gap", f"{mm['MAE']:.0f} kg/week")
 
         st.markdown(
-            f"On average, predictions were about **{err_pct:.0f}%** off compared to actual sales."
+            f"On average, predictions were about **{err_pct:.0f}%** off compared to actual sales. "
+            f"This is the model's tested accuracy before using it on unknown future dates."
         )
 
         weekly_h = data["holdout_weekly"]
@@ -479,7 +507,7 @@ with tab_test:
         )
 
         st.markdown("#### Products with largest prediction gaps")
-        st.caption("Higher error rate = harder to predict (often very high or very low volume items).")
+        st.caption("Higher error = harder to predict. Usually very high or very low volume items.")
         sku_h = data["holdout_sku"]
         sku_h = sku_h[sku_h["method"] == "walkforward_1step"].head(top_n)
         sku_show = sku_h.copy()
@@ -493,35 +521,35 @@ with tab_test:
         fig3.update_layout(height=max(380, top_n * 28))
         st.plotly_chart(fig3, width="stretch")
 
-# Download
+# ── Download ───────────────────────────────────────────────────────────────────
 with tab_download:
     st.subheader("Download reports")
-    st.markdown("Export tables to Excel or share with your team.")
+    st.markdown("Export to CSV — open in Excel or Google Sheets.")
 
     kind = st.radio(
         "What do you want to download?",
         [
-            "Expected sales — week by week (each product)",
-            "Expected sales — by product & week",
-            "Past sales — week by week",
+            "Expected sales — each product, each week (selected period)",
+            "Expected sales — by product total (selected period)",
+            "Past sales — each product, each week",
         ],
         horizontal=False,
     )
 
-    if kind.startswith("Expected sales — week"):
+    if kind.startswith("Expected sales — each product"):
         table = fc_f.sort_values(["week_start", "units"], ascending=[True, False])
-    elif kind.startswith("Expected sales — by product"):
+    elif kind.startswith("Expected sales — by product total"):
         table = (
-            fc_f.groupby(["week_start", "Product", "Main_Category"], as_index=False)["units"]
+            fc_f.groupby(["Product", "Main_Category", "Brand"], as_index=False)["units"]
             .sum()
-            .sort_values(["week_start", "units"], ascending=[True, False])
+            .sort_values("units", ascending=False)
         )
     else:
         table = hist_f.sort_values(["week_start", "units"], ascending=[True, False])
 
     st.dataframe(friendly_table(table), width="stretch", hide_index=True, height=400)
     st.download_button(
-        label="Download as Excel/CSV file",
+        label="Download as CSV",
         data=table.to_csv(index=False).encode("utf-8"),
         file_name="sales_forecast_export.csv",
         mime="text/csv",
@@ -533,13 +561,13 @@ with tab_download:
     ch = data["channel"].sort_values("qty_sum", ascending=False)
     ch_show = ch.rename(columns={
         "channel": "Sales type",
-        "qty_sum": "Total packets",
+        "qty_sum": "Total kg",
         "qty_mean": "Avg per bill line",
         "bulk_lines": "Large orders flagged",
     })
-    fig = px.bar(ch_show, x="Sales type", y="Total packets", text_auto=".2s")
+    fig = px.bar(ch_show, x="Sales type", y="Total kg", text_auto=".2s")
     style_fig(fig, "Where sales come from (all transaction types)")
     fig.update_layout(showlegend=False, xaxis_tickangle=-30)
     st.plotly_chart(fig, width="stretch")
 
-st.caption("Refresh browser after re-running the forecast.")
+st.caption("After updating data, re-run `python run_pipeline.py` then refresh the browser.")
