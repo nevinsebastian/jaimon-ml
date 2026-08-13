@@ -4,6 +4,8 @@ Weekly and monthly sales forecast for Pavizham products. Reads sales CSV, trains
 
 All quantities are in **kilograms (kg)** — the `quantity_in_kg` column records how many kg of each product were sold.
 
+Want to learn how every part works? Read **[HOW_IT_WORKS.md](HOW_IT_WORKS.md)** — a full walkthrough for sharing with teammates.
+
 ---
 
 ## Requirements
